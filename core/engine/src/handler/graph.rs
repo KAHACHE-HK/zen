@@ -13,12 +13,7 @@ use thiserror::Error;
 use crate::handler::custom_node_adapter::{CustomNodeAdapter, CustomNodeRequest};
 use crate::handler::decision::DecisionHandler;
 use crate::handler::expression::ExpressionHandler;
-use crate::handler::function::function::{Function, FunctionConfig};
-use crate::handler::function::module::console::ConsoleListener;
-use crate::handler::function::module::zen::ZenListener;
-use crate::handler::function::FunctionHandler;
-use crate::handler::function_v1;
-use crate::handler::function_v1::runtime::create_runtime;
+// use crate::handler::function::function::{Function, FunctionConfig};
 use crate::handler::node::NodeRequest;
 use crate::handler::table::zen::DecisionTableHandler;
 use crate::handler::traversal::{GraphWalker, StableDiDecisionGraph};
@@ -33,7 +28,7 @@ pub struct DecisionGraph<'a, L: DecisionLoader + 'static, A: CustomNodeAdapter +
     trace: bool,
     max_depth: u8,
     iteration: u8,
-    runtime: Option<Rc<Function>>,
+    runtime: Option<Rc<None>>,
 }
 
 pub struct DecisionGraphConfig<'a, L: DecisionLoader + 'static, A: CustomNodeAdapter + 'static> {
@@ -81,33 +76,6 @@ impl<'a, L: DecisionLoader + 'static, A: CustomNodeAdapter + 'static> DecisionGr
             max_depth: config.max_depth,
             runtime: None,
         })
-    }
-
-    pub(crate) fn with_function(mut self, runtime: Option<Rc<Function>>) -> Self {
-        self.runtime = runtime;
-        self
-    }
-
-    async fn get_or_insert_function(&mut self) -> anyhow::Result<Rc<Function>> {
-        if let Some(function) = &self.runtime {
-            return Ok(function.clone());
-        }
-
-        let function = Function::create(FunctionConfig {
-            listeners: Some(vec![
-                Box::new(ConsoleListener),
-                Box::new(ZenListener {
-                    loader: self.loader.clone(),
-                    adapter: self.adapter.clone(),
-                }),
-            ]),
-        })
-        .await
-        .map_err(|err| anyhow!(err.to_string()))?;
-        let rc_function = Rc::new(function);
-        self.runtime.replace(rc_function.clone());
-
-        Ok(rc_function)
     }
 
     pub fn validate(&self) -> Result<(), DecisionGraphValidationError> {
@@ -214,59 +182,6 @@ impl<'a, L: DecisionLoader + 'static, A: CustomNodeAdapter + 'static> DecisionGr
                     });
 
                     walker.set_node_data(nid, input_data);
-                }
-                DecisionNodeKind::FunctionNode { content } => {
-                    let function = self.get_or_insert_function().await.map_err(|e| NodeError {
-                        source: e.into(),
-                        node_id: node.id.clone(),
-                    })?;
-
-                    let mut node_request = NodeRequest {
-                        node,
-                        iteration: self.iteration,
-                        input: walker.incoming_node_data(&self.graph, nid, true),
-                    };
-                    let mut res = match content {
-                        FunctionNodeContent::Version2(_) => FunctionHandler::new(
-                            function,
-                            self.trace,
-                            self.iteration,
-                            self.max_depth,
-                        )
-                        .handle(&node_request)
-                        .await
-                        .map_err(|e| NodeError {
-                            source: e.into(),
-                            node_id: node.id.clone(),
-                        })?,
-                        FunctionNodeContent::Version1(_) => {
-                            let runtime = create_runtime().map_err(|e| NodeError {
-                                source: e.into(),
-                                node_id: node.id.clone(),
-                            })?;
-
-                            function_v1::FunctionHandler::new(self.trace, runtime)
-                                .handle(&node_request)
-                                .await
-                                .map_err(|e| NodeError {
-                                    source: e.into(),
-                                    node_id: node.id.clone(),
-                                })?
-                        }
-                    };
-
-                    trim_nodes(&mut node_request.input);
-                    trim_nodes(&mut res.output);
-
-                    trace!({
-                        input: node_request.input,
-                        output: res.output.clone(),
-                        name: node.name.clone(),
-                        id: node.id.clone(),
-                        performance: Some(format!("{:?}", start.elapsed())),
-                        trace_data: res.trace_data,
-                    });
-                    walker.set_node_data(nid, res.output);
                 }
                 DecisionNodeKind::DecisionNode { .. } => {
                     let mut node_request = NodeRequest {

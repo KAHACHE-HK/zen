@@ -1,3 +1,7 @@
+replace tokio by tokio_wasi = { version = "1.25", features = ["full"] }
+cargo wasi build --release --target wasm32-wasi
+
+
 # ZEN Engine
 
 ZEN Engine is business friendly Open-Source Business Rules Engine
